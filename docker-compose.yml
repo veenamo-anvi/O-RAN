@@ -1,0 +1,146 @@
+# O-RAN Telecom Network Automation — 12-container dev stack.
+#   topology.json: mounted RW to the controller, RO to all simulators.
+#   Docker overrides: CLAUDE_CLI_PATH=/usr/bin/claude, GEMINI_MODEL=gemini-2.5-flash,
+#   POLL_INTERVAL_SEC=30.
+
+x-influx-env: &influx-env
+  INFLUX_URL: http://influxdb:8086
+  INFLUX_TOKEN: telecom-super-secret-auth-token-2026
+  INFLUX_ORG: telecom
+  INFLUX_BUCKET: telecom_metrics
+
+services:
+  influxdb:
+    image: influxdb:2.7
+    ports: ["8086:8086"]
+    environment:
+      DOCKER_INFLUXDB_INIT_MODE: setup
+      DOCKER_INFLUXDB_INIT_USERNAME: admin
+      DOCKER_INFLUXDB_INIT_PASSWORD: admin12345
+      DOCKER_INFLUXDB_INIT_ORG: telecom
+      DOCKER_INFLUXDB_INIT_BUCKET: telecom_metrics
+      DOCKER_INFLUXDB_INIT_ADMIN_TOKEN: telecom-super-secret-auth-token-2026
+    volumes: ["influx-data:/var/lib/influxdb2"]
+    healthcheck:
+      test: ["CMD", "influx", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  grafana:
+    image: grafana/grafana:11.3.0
+    ports: ["3000:3000"]
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning
+    depends_on: [influxdb]
+
+  controller:
+    build: ./agents/controller
+    ports: ["8080:8080"]
+    environment:
+      <<: *influx-env
+      TOPOLOGY_FILE: /config/topology.json
+    volumes:
+      - ./dev-env/config:/config       # RW — controller is the only writer
+    depends_on:
+      influxdb: {condition: service_healthy}
+
+  planning-api:
+    build: ./agents/planning
+    ports: ["8081:8081"]
+    environment:
+      CONTROLLER_URL: http://controller:8080
+    depends_on: [controller]
+
+  core-sim:
+    build: {context: ., dockerfile: sims/core_sim/Dockerfile}
+    environment:
+      <<: *influx-env
+      TOPOLOGY_FILE: /config/topology.json
+      STREAM_INTERVAL_SEC: "10"
+    volumes:
+      - ./dev-env/config:/config:ro    # RO — simulators only poll
+    depends_on:
+      influxdb: {condition: service_healthy}
+
+  cu-mls:
+    build: {context: ., dockerfile: sims/cu_sim/Dockerfile}
+    environment:
+      <<: *influx-env
+      CU_ID: CU-MLS
+      TOPOLOGY_FILE: /config/topology.json
+      STREAM_INTERVAL_SEC: "10"
+    volumes: ["./dev-env/config:/config:ro"]
+    depends_on:
+      influxdb: {condition: service_healthy}
+
+  du-mls-1:
+    build: {context: ., dockerfile: sims/du_sim/Dockerfile}
+    environment:
+      <<: *influx-env
+      DU_ID: DU-MLS-1
+      TOPOLOGY_FILE: /config/topology.json
+      STREAM_INTERVAL_SEC: "10"
+    volumes: ["./dev-env/config:/config:ro"]
+    depends_on:
+      influxdb: {condition: service_healthy}
+
+  du-mls-2:
+    build: {context: ., dockerfile: sims/du_sim/Dockerfile}
+    environment:
+      <<: *influx-env
+      DU_ID: DU-MLS-2
+      TOPOLOGY_FILE: /config/topology.json
+      STREAM_INTERVAL_SEC: "10"
+    volumes: ["./dev-env/config:/config:ro"]
+    depends_on:
+      influxdb: {condition: service_healthy}
+
+  du-mls-3:
+    build: {context: ., dockerfile: sims/du_sim/Dockerfile}
+    environment:
+      <<: *influx-env
+      DU_ID: DU-MLS-3
+      TOPOLOGY_FILE: /config/topology.json
+      STREAM_INTERVAL_SEC: "10"
+    volumes: ["./dev-env/config:/config:ro"]
+    depends_on:
+      influxdb: {condition: service_healthy}
+
+  kpi-agent:
+    build: {context: ., dockerfile: agents/kpi_agent/Dockerfile}
+    environment:
+      <<: *influx-env
+      CONTROLLER_URL: http://controller:8080
+      POLL_INTERVAL_SEC: "30"          # Docker override (code default is 10)
+      MIN_CONFIDENCE: "0.70"
+    depends_on:
+      influxdb: {condition: service_healthy}
+      controller: {condition: service_started}
+
+  orchestrator:
+    build: ./agents/orchestrator
+    ports: ["8082:8082"]
+    env_file:
+      - .env                          # LLM credentials (GOOGLE_API_KEY / ANTHROPIC_API_KEY / ...)
+    environment:
+      <<: *influx-env
+      CONTROLLER_URL: http://controller:8080
+      PLANNING_URL: http://planning-api:8081
+      ANTHROPIC_MODEL_NAME: ${ANTHROPIC_MODEL_NAME:-sonnet}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-2.5-flash}   # Docker override (code default gemini-2.0-flash)
+    depends_on: [controller, planning-api]
+
+  map-server:
+    build: ./agents/map_server
+    ports: ["8083:8083"]
+    environment:
+      CONTROLLER_URL: http://controller:8080
+      ORCHESTRATOR_URL: http://orchestrator:8082
+    depends_on: [controller, orchestrator]
+
+volumes:
+  influx-data:

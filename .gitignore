@@ -1,0 +1,22 @@
+# secrets / local env
+.env
+
+# python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# note: data/dataset.csv and agents/kpi_agent/kpi_model.pt ARE committed so
+# `docker compose up --build` works on a fresh clone (Dockerfile copies them).
+
+# topology test artifacts
+dev-env/config/topology.json.tmp
+dev-env/config/topology.json.test
+
+# os / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
